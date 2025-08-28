@@ -2,14 +2,15 @@ const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 const { ChatOllama } = require("@langchain/ollama");
-const { StateGraph, END,Annotation } = require("@langchain/langgraph");
+const { StateGraph, END, Annotation } = require("@langchain/langgraph");
 
 // ✅ LLM connection (Ollama)
 const model = new ChatOllama({
   baseUrl: "http://localhost:11434",
   model: "codellama:7b-instruct-q4_K_M",
 });
-// Define the StateGraph annotation to match the State class fields
+
+// ✅ StateGraph schema
 const StateAnnotation = Annotation.Root({
   files: Annotation(),
   index: Annotation(),
@@ -18,51 +19,44 @@ const StateAnnotation = Annotation.Root({
   functions: Annotation(),
   tests: Annotation(),
 });
-// ✅ State structure
-class State {
-  constructor() {
-    this.files = [];
-    this.index = 0;
-    this.code = "";
-    this.filename = null;
-    this.functions = [];
-    this.tests = "";
+
+// ----------------------------
+// 🔹 Utility: recursively find .js files
+// ----------------------------
+function findAllJsFiles(dir, allFiles = []) {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "__tests__") continue; // skip test folders
+      findAllJsFiles(fullPath, allFiles);
+    } else if (
+      entry.isFile() &&
+      entry.name.endsWith(".js") &&
+      !entry.name.endsWith(".test.js") &&
+      !entry.name.endsWith(".spec.js") &&
+      entry.name !== "testgen.js"
+    ) {
+      allFiles.push(fullPath);
+    }
   }
+  return allFiles;
 }
 
 // ----------------------------
-// 🔹 Step 0: Detect changed files
+// 🔹 Step 0: Detect target files
 // ----------------------------
-async function gitDiffFiles(state) {
-  try {
-    const result = execSync("git diff --name-only HEAD", { encoding: "utf-8" });
-    const allFiles = result
-      .split("\n")
-      .map((f) => f.trim())
-      .filter((f) => f.endsWith(".js"));
+async function getAllFiles(state) {
+  const projectRoot = process.cwd();
+  const files = findAllJsFiles(projectRoot);
 
-    const files = allFiles.filter((f) => {
-      // skip tests and the generator itself
-      return (
-        !f.includes("__tests__") &&
-        !f.endsWith(".test.js") &&
-        !f.endsWith(".spec.js") &&
-        path.basename(f) !== "testgen.js" &&
-        fs.existsSync(f) // skip deleted
-      );
-    });
-
-    if (files.length === 0) {
-      console.log("⚠️ No source file changes detected.");
-      return { files: [], index: 0, filename: null };
-    }
-
-    console.log("📂 Changed files detected:", files);
-    return { files, index: 0, filename: files[0] };
-  } catch (err) {
-    console.error("❌ Error detecting git diff:", err);
+  if (files.length === 0) {
+    console.log("⚠️ No source .js files found.");
     return { files: [], index: 0, filename: null };
   }
+
+  console.log("📂 Files detected:", files);
+  return { files, index: 0, filename: files[0] };
 }
 
 // ----------------------------
@@ -79,25 +73,24 @@ async function extractCode(state) {
 // ----------------------------
 // 🔹 Step 2: Extract Functions (JS only for now)
 // ----------------------------
-async function extractFunctions(state) {
-  const { filename, code } = state;
-  if (!code || !filename) return { functions: [] };
+// async function extractFunctions(state) {
+//   const { filename, code } = state;
+//   if (!code || !filename) return { functions: [] };
 
-  // Naive regex extractor (JS only for now)
-  const functionRegex =
-    /function\s+([a-zA-Z0-9_]+)|const\s+([a-zA-Z0-9_]+)\s*=\s*\(/g;
+//   const functionRegex =
+//     /function\s+([a-zA-Z0-9_]+)|const\s+([a-zA-Z0-9_]+)\s*=\s*\(/g;
 
-  const functions = [];
-  let match;
-  while ((match = functionRegex.exec(code)) !== null) {
-    const name = match[1] || match[2];
-    if (name) functions.push(name);
-  }
+//   const functions = [];
+//   let match;
+//   while ((match = functionRegex.exec(code)) !== null) {
+//     const name = match[1] || match[2];
+//     if (name) functions.push(name);
+//   }
 
-  const unique = [...new Set(functions)];
-  console.log("🔍 Functions extracted:", unique);
-  return { functions: unique };
-}
+//   const unique = [...new Set(functions)];
+//   console.log("🔍 Functions extracted from", filename, ":", unique);
+//   return { functions: unique };
+// }
 
 // ----------------------------
 // 🔹 Step 3: Generate Tests
@@ -163,22 +156,20 @@ async function nextFile(state) {
 // ----------------------------
 // 🔹 LangGraph wiring
 // ----------------------------
-// Pass the Annotation.Root schema to StateGraph (it expects an Annotation.Root or Zod schema)
 const graph = new StateGraph(StateAnnotation);
-graph.addNode("gitdiff", gitDiffFiles);
+graph.addNode("getAllFiles", getAllFiles);
 graph.addNode("extract", extractCode);
-graph.addNode("extractFunctions", extractFunctions);
+// graph.addNode("extractFunctions", extractFunctions);
 graph.addNode("generate", generateTests);
 graph.addNode("save", saveTests);
 graph.addNode("next", nextFile);
 
-graph.setEntryPoint("gitdiff");
-graph.addEdge("gitdiff", "extract");
-graph.addEdge("extract", "extractFunctions");
-graph.addEdge("extractFunctions", "generate");
+graph.setEntryPoint("getAllFiles");
+graph.addEdge("getAllFiles", "generate");
+// graph.addEdge("extract", "extractFunctions");
+// graph.addEdge("extractFunctions", "generate");
 graph.addEdge("generate", "save");
 graph.addEdge("save", "next");
-// Conditional routing: only go back to `extract` when there's a filename to process.
 graph.addConditionalEdges("next", (state) => {
   return state.filename ? "extract" : END;
 });
