@@ -21,11 +21,11 @@ app.get("/items/:id", (req, res) => {
   res.json(item);
 });
 // READ - Get item by name
-// app.get("/items/name/:name", (req, res) => {
-//   const item = DB.find((i) => i.name === req.params.name);
-//   if (!item) return res.status(404).json({ message: "Item not found" });
-//   res.json(item);
-// });
+app.get("/items/name/:name", (req, res) => {
+  const item = DB.find((i) => i.name === req.params.name);
+  if (!item) return res.status(404).json({ message: "Item not found" });
+  res.json(item);
+});
 // UPDATE - Modify item by ID
 app.put("/items/:id", (req, res) => {
   const index = DB.findIndex((i) => i.id === parseInt(req.params.id));
