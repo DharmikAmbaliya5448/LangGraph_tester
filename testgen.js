@@ -21,14 +21,30 @@ const StateAnnotation = Annotation.Root({
 });
 
 // ----------------------------
-// 🔹 Utility: recursively find .js files
+// 🔹 Utility: recursively find .js files (skip test + vendor folders)
 // ----------------------------
 function findAllJsFiles(dir, allFiles = []) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
+
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
+
     if (entry.isDirectory()) {
-      if (entry.name === "__tests__") continue; // skip test folders
+      // 🚫 skip unwanted folders
+      if (
+        [
+          "__tests__",
+          "node_modules",
+          ".git",
+          ".gitignore",
+          "package.json",
+          "package-lock.json",
+          "dist",
+          "build",
+        ].includes(entry.name)
+      ) {
+        continue;
+      }
       findAllJsFiles(fullPath, allFiles);
     } else if (
       entry.isFile() &&
@@ -40,6 +56,7 @@ function findAllJsFiles(dir, allFiles = []) {
       allFiles.push(fullPath);
     }
   }
+
   return allFiles;
 }
 
