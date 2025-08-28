@@ -1,15 +1,23 @@
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
-const { ChatOllama } = require("langchain/chat_models/ollama");
-const { StateGraph, END } = require("langgraph");
+const { ChatOllama } = require("@langchain/ollama");
+const { StateGraph, END,Annotation } = require("@langchain/langgraph");
 
 // ✅ LLM connection (Ollama)
 const model = new ChatOllama({
   baseUrl: "http://localhost:11434",
   model: "codellama:7b-instruct-q4_K_M",
 });
-
+// Define the StateGraph annotation to match the State class fields
+const StateAnnotation = Annotation.Root({
+  files: Annotation(),
+  index: Annotation(),
+  code: Annotation(),
+  filename: Annotation(),
+  functions: Annotation(),
+  tests: Annotation(),
+});
 // ✅ State structure
 class State {
   constructor() {
@@ -33,13 +41,16 @@ async function gitDiffFiles(state) {
       .map((f) => f.trim())
       .filter((f) => f.endsWith(".js"));
 
-    const files = allFiles.filter(
-      (f) =>
+    const files = allFiles.filter((f) => {
+      // skip tests and the generator itself
+      return (
         !f.includes("__tests__") &&
         !f.endsWith(".test.js") &&
         !f.endsWith(".spec.js") &&
+        path.basename(f) !== "testgen.js" &&
         fs.existsSync(f) // skip deleted
-    );
+      );
+    });
 
     if (files.length === 0) {
       console.log("⚠️ No source file changes detected.");
@@ -152,22 +163,25 @@ async function nextFile(state) {
 // ----------------------------
 // 🔹 LangGraph wiring
 // ----------------------------
-const graph = new StateGraph(State);
+// Pass the Annotation.Root schema to StateGraph (it expects an Annotation.Root or Zod schema)
+const graph = new StateGraph(StateAnnotation);
 graph.addNode("gitdiff", gitDiffFiles);
 graph.addNode("extract", extractCode);
-graph.addNode("functions", extractFunctions);
+graph.addNode("extractFunctions", extractFunctions);
 graph.addNode("generate", generateTests);
 graph.addNode("save", saveTests);
 graph.addNode("next", nextFile);
 
 graph.setEntryPoint("gitdiff");
 graph.addEdge("gitdiff", "extract");
-graph.addEdge("extract", "functions");
-graph.addEdge("functions", "generate");
+graph.addEdge("extract", "extractFunctions");
+graph.addEdge("extractFunctions", "generate");
 graph.addEdge("generate", "save");
 graph.addEdge("save", "next");
-graph.addEdge("next", "extract");
-graph.addEdge("next", END);
+// Conditional routing: only go back to `extract` when there's a filename to process.
+graph.addConditionalEdges("next", (state) => {
+  return state.filename ? "extract" : END;
+});
 
 const app = graph.compile();
 
